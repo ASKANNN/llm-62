@@ -51,8 +51,8 @@ def main():
         if user_input == 'exit':
             print('Bye')
             break
-        if not user_input.strip():
-            continue  # skip empty input
+        if not user_input.strip():        # skip empty input
+            continue                  
         messages.append({
             'role': 'user',
             'content': user_input
