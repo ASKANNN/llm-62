@@ -1,21 +1,13 @@
-# pip install requests
+# pip install ollama
 
-import requests
+import ollama
 
-URL = 'http://localhost:11434/api/chat'
 MODEL_NAME = 'phi3'
 
 
 def chat_request(messages):
-    payload = {
-        'model': MODEL_NAME,
-        'messages': messages,
-        'stream': False,
-    }
-    response = requests.post(URL, json=payload)
-    response.raise_for_status()
-    data = response.json()
-    return data['message']['content']
+    response = ollama.chat(model=MODEL_NAME, messages=messages)
+    return response['message']['content']
 
 
 def main():
