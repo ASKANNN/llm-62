@@ -1,28 +1,66 @@
-# pip install requests
+import asyncio
+import json
+from ollama import AsyncClient
+from tools import TOOLS
+from system_content import SYSTEM_CONTENT
 
-import requests
+MODEL_NAME = 'qwen2.5:3b'
 
-URL = 'http://localhost:11434/api/chat'
-MODEL_NAME = 'phi3'
-
-
-def chat_request(messages):
-    payload = {
-        'model': MODEL_NAME,
-        'messages': messages,
-        'stream': False,
-    }
-    response = requests.post(URL, json=payload)
-    response.raise_for_status()
-    data = response.json()
-    return data['message']['content']
+client = AsyncClient()
 
 
-def main():
+async def chat_request(messages):
+    full_reply = ''
+    try:
+        stream = await client.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            stream=True,
+            options={'num_predict': 300}
+        )
+        async for chunk in stream:
+            piece = chunk['message']['content']
+            print(piece, end='', flush=True)
+            full_reply += piece
+    except Exception as e:
+        print(f"Error: {e}", end='')
+    print()
+    return full_reply
+
+
+def parse_tool_call(text):
+    start = text.find('{')
+    if start == -1:
+        return None
+    try:
+        data, _ = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if 'tool' in data:
+        return data
+    for tool_name in TOOLS:
+        if tool_name in text[:start]:
+            return {'tool': tool_name, 'arguments': data}
+    return None
+
+
+async def call_tool(tool_call: dict):
+    tool = TOOLS.get(tool_call.get('tool'))
+    if not tool:
+        return None
+    try:
+        return await tool(**tool_call.get('arguments', {}))
+    except TypeError:
+        return "Could not call the tool: missing or invalid arguments"
+
+
+async def main():
     messages = [
         {
             'role': 'system',
-            'content': 'You are a helpful assistant. Answer briefly and clearly.'
+            'content': SYSTEM_CONTENT
         }
     ]
     print('phi-3 simple chat. Type "exit" to quit.')
@@ -31,17 +69,41 @@ def main():
         if user_input == 'exit':
             print('Bye')
             break
+        if not user_input.strip():
+            continue
         messages.append({
             'role': 'user',
             'content': user_input
         })
-        reply = chat_request(messages)
+        print('\nAgent:', end='', flush=True)
+        reply = await chat_request(messages)
         messages.append({
             'role': 'assistant',
             'content': reply
         })
-        print('\nAgent:', reply)
+        tool_call = parse_tool_call(reply)
+        if tool_call:
+            messages[-1]['content'] = json.dumps(tool_call)
+            tool_result = await call_tool(tool_call)
+            if tool_result and tool_result.startswith('Could not'):
+                print(f'\nAgent: {tool_result}')
+                messages.append({
+                    'role': 'assistant',
+                    'content': tool_result
+                })
+            elif tool_result:
+                messages.append({
+                    'role': 'system',
+                    'content': f"Tool result: {tool_result}\nAnswer the user's last question using exactly these values and units. Do not convert units or invent any numbers."
+                })
+                print('\nAgent:', end='', flush=True)
+                reply = await chat_request(messages)
+                messages.append({
+                    'role': 'assistant',
+                    'content': reply
+                })
         print('_' * 60)
 
 
-main()
+if __name__ == '__main__':
+    asyncio.run(main())
