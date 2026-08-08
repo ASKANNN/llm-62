@@ -4,7 +4,7 @@ from ollama import AsyncClient
 from tools import TOOLS
 from system_content import SYSTEM_CONTENT
 
-MODEL_NAME = 'phi3'
+MODEL_NAME = 'qwen2.5:3b'
 
 client = AsyncClient()
 
@@ -36,7 +36,14 @@ def parse_tool_call(text):
         data, _ = json.JSONDecoder().raw_decode(text[start:])
     except json.JSONDecodeError:
         return None
-    return data if isinstance(data, dict) and 'tool' in data else None
+    if not isinstance(data, dict):
+        return None
+    if 'tool' in data:
+        return data
+    for tool_name in TOOLS:
+        if tool_name in text[:start]:
+            return {'tool': tool_name, 'arguments': data}
+    return None
 
 
 async def call_tool(tool_call: dict):
@@ -78,7 +85,13 @@ async def main():
         if tool_call:
             messages[-1]['content'] = json.dumps(tool_call)
             tool_result = await call_tool(tool_call)
-            if tool_result:
+            if tool_result and tool_result.startswith('Could not'):
+                print(f'\nAgent: {tool_result}')
+                messages.append({
+                    'role': 'assistant',
+                    'content': tool_result
+                })
+            elif tool_result:
                 messages.append({
                     'role': 'system',
                     'content': f"Tool result: {tool_result}\nAnswer the user's last question using exactly these values and units. Do not convert units or invent any numbers."
