@@ -1,16 +1,24 @@
-from ollama import chat
+import asyncio
 import json
+from ollama import AsyncClient
 from tools import TOOLS
 from system_content import SYSTEM_CONTENT
 
 MODEL_NAME = 'phi3'
 
+client = AsyncClient()
 
-def chat_request(messages):
+
+async def chat_request(messages):
     full_reply = ''
     try:
-        stream = chat(model=MODEL_NAME, messages=messages, stream=True)
-        for chunk in stream:
+        stream = await client.chat(
+            model=MODEL_NAME,
+            messages=messages,
+            stream=True,
+            options={'num_predict': 300}
+        )
+        async for chunk in stream:
             piece = chunk['message']['content']
             print(piece, end='', flush=True)
             full_reply += piece
@@ -21,24 +29,27 @@ def chat_request(messages):
 
 
 def parse_tool_call(text):
-    start, end = text.find('{'), text.rfind('}')
-    if start == -1 or end == -1:
+    start = text.find('{')
+    if start == -1:
         return None
     try:
-        data = json.loads(text[start:end + 1])
+        data, _ = json.JSONDecoder().raw_decode(text[start:])
     except json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) and 'tool' in data else None
 
 
-def call_tool(tool_call: dict):
+async def call_tool(tool_call: dict):
     tool = TOOLS.get(tool_call.get('tool'))
     if not tool:
         return None
-    return tool(**tool_call.get('arguments', {}))
+    try:
+        return await tool(**tool_call.get('arguments', {}))
+    except TypeError:
+        return "Could not call the tool: missing or invalid arguments"
 
 
-def main():
+async def main():
     messages = [
         {
             'role': 'system',
@@ -51,28 +62,29 @@ def main():
         if user_input == 'exit':
             print('Bye')
             break
-        if not user_input.strip():        # skip empty input
-            continue                  
+        if not user_input.strip():
+            continue
         messages.append({
             'role': 'user',
             'content': user_input
         })
         print('\nAgent:', end='', flush=True)
-        reply = chat_request(messages)
+        reply = await chat_request(messages)
         messages.append({
             'role': 'assistant',
             'content': reply
         })
         tool_call = parse_tool_call(reply)
         if tool_call:
-            tool_result = call_tool(tool_call)
+            messages[-1]['content'] = json.dumps(tool_call)
+            tool_result = await call_tool(tool_call)
             if tool_result:
                 messages.append({
                     'role': 'system',
-                    'content': f"Tool result: {tool_result}\nAnswer the user's last question using the this result."
+                    'content': f"Tool result: {tool_result}\nAnswer the user's last question using exactly these values and units. Do not convert units or invent any numbers."
                 })
                 print('\nAgent:', end='', flush=True)
-                reply = chat_request(messages)
+                reply = await chat_request(messages)
                 messages.append({
                     'role': 'assistant',
                     'content': reply
@@ -80,4 +92,5 @@ def main():
         print('_' * 60)
 
 
-main()
+if __name__ == '__main__':
+    asyncio.run(main())
